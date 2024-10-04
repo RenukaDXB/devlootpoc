@@ -1,0 +1,73 @@
+def AWS_Account
+
+pipeline {
+    agent any 
+    environment {
+        CI = 'true'
+    }
+    stages {        
+        stage('checkout code') {
+            steps {
+                echo 'checkout...'
+                git branch: 'Development', credentialsId: 'Jenkins-Github-ssh', url: 'git@github.com:RenukaDXB/devlootpoc.git'
+            }
+        }       
+        stage('Docker Build') {
+            steps {
+                echo 'Building Docker image...'
+					dir('/var/lib/jenkins/workspace/devloot_poc-AWS/POC_web/') {
+
+					sh 'docker build -t devloot .'
+                }               
+            }
+        }
+		stage('Push to ECR') {
+            steps {
+                echo 'Pushing the image to ECR...'
+				dir('/var/lib/jenkins/workspace/devloot_poc-AWS/POC_web/') {
+                    script {
+						withAWS(credentials: 'AWS-poc-renuka', region: 'us-west-1') {
+							AWS_Account = sh(returnStdout: true, script: "cat devops-properties2 | grep 1 | cut -f2 -d'='").trim()
+							sh "aws ecr get-login-password --region us-west-1 | docker login --username AWS --password-stdin ${AWS_Account}.dkr.ecr.us-west-1.amazonaws.com"
+							sh "docker tag devloot:latest${AWS_Account}.dkr.ecr.us-west-1.amazonaws.com/devloot:latest"
+							sh "docker push ${AWS_Account}.dkr.ecr.us-west-1.amazonaws.com/devloot:latest"
+						
+						}
+                    }      
+                }         
+            }
+        }
+        stage('Deploy to EKS') {
+            steps {
+                echo 'Deploying to EKS...'
+                dir('/var/lib/jenkins/workspace/devloot_poc-AWS/POC_web/') {                        
+                    withAWS(credentials: 'AWS-poc-renuka', region: 'us-west-1') {
+                        sh 'aws eks update-kubeconfig --region us-west-1 --name devloot-eks-B8vIw1nf'
+                    	sh 'kubectl delete -f ./eks-yaml/poc_deployment.yaml'
+                    	sh 'kubectl apply -f ./eks-yaml/poc_deployment.yaml'
+                        sh 'kubectl get pods -n poc-dev-ns'
+                    }          
+                }     
+            }
+       }
+    }
+
+	post{
+    failure {
+    	emailext( 		
+			subject: "devloot Project Service (${env.JOB_NAME}) Build - ${currentBuild.currentResult}",
+			body: "${currentBuild.currentResult}: Job ${env.JOB_NAME}\nMore Info can be found here: ${env.BUILD_URL}",
+			to: "renukaradhakrishnan@hotmail.com",			
+			attachLog: true
+		)
+      }
+    success {
+        emailext(
+            subject: "devloot Project Service (${env.JOB_NAME}) Build - ${currentBuild.currentResult}",
+			body: "${currentBuild.currentResult}: Job ${env.JOB_NAME}\nMore Info can be found here: ${env.BUILD_URL}",
+			to: "renukaradhakrishnan@hotmail.com",			
+			attachLog: true
+            )
+      }    
+    }
+}
